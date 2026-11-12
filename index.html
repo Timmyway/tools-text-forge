@@ -1,0 +1,387 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TextForge</title>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="assets/css/app.css">
+</head>
+
+<body>
+
+    <section class="app" x-data="textFormatter()">
+
+        <header class="app-head">
+            <h1>TextForge</h1>
+            <ul class="stats" aria-label="Input statistics">
+                <li><b x-text="stats.words"></b> words</li>
+                <li><b x-text="stats.chars"></b> characters</li>
+                <li><b x-text="stats.noSpaces"></b> without spaces</li>
+                <li><b x-text="stats.lines"></b> lines</li>
+                <li><b x-text="stats.sentences"></b> sentences</li>
+                <li><b x-text="stats.reading"></b> reading time</li>
+            </ul>
+        </header>
+
+        <!-- TOOLS (side) -->
+        <aside class="sidebar" aria-label="Tools">
+            <div class="tabs" role="tablist" aria-label="Tool categories">
+                <template x-for="t in tabs" :key="t.id">
+                    <button type="button" class="tab" role="tab" :id="'tab-' + t.id" :aria-selected="tab === t.id"
+                        :aria-controls="'panel-' + t.id" @click="tab = t.id" x-text="t.label"></button>
+                </template>
+            </div>
+
+            <!-- Format -->
+            <div class="panel" role="tabpanel" id="panel-format" aria-labelledby="tab-format" x-show="tab === 'format'">
+                <div class="row">
+                    <label class="param">Line width
+                        <input class="w-num" type="number" min="1" x-model.number="charLimit">
+                    </label>
+                    <button class="btn" type="button" @click="apply('wrap')"
+                        title="Break lines so none is longer than the line width">Wrap text</button>
+                </div>
+                <div class="row">
+                    <label class="param">Separator
+                        <input class="w-sep" type="text" maxlength="1" x-model="separator">
+                    </label>
+                    <button class="btn" type="button" @click="apply('slugify')"
+                        title="Hello World! → hello-world (one slug per line)">Slugify</button>
+                    <button class="btn btn-alt" type="button" @click="apply('unslugify')"
+                        title="hello-world → Hello World">Unslugify</button>
+                </div>
+                <div class="row">
+                    <button class="btn" type="button" @click="apply('hashtags')"
+                        title="Turns “Learn English, Idioms” into #LearnEnglish #Idioms, and back">Hashtags ⇄
+                        List</button>
+                </div>
+            </div>
+
+            <!-- Case -->
+            <div class="panel" role="tabpanel" id="panel-case" aria-labelledby="tab-case" x-show="tab === 'case'"
+                x-cloak>
+                <div class="row cols2">
+                    <template x-for="c in cases" :key="c.id">
+                        <button class="btn" type="button" @click="apply('convertCase', c.id)" :title="c.hint"
+                            x-text="c.label"></button>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Lists -->
+            <div class="panel" role="tabpanel" id="panel-lists" aria-labelledby="tab-lists" x-show="tab === 'lists'"
+                x-cloak>
+                <template x-for="g in listGroups" :key="g.label">
+                    <div class="row">
+                        <span class="row-label" x-text="g.label"></span>
+                        <template x-for="i in g.items" :key="i.arg">
+                            <button class="btn" type="button" @click="apply('listOp', i.arg)" :title="i.hint"
+                                x-text="i.label"></button>
+                        </template>
+                    </div>
+                </template>
+            </div>
+        </aside>
+
+        <!-- INPUT -->
+        <div class="pane pane-in">
+            <div class="pane-head">
+                <label for="input">Input</label>
+                <span class="spacer"></span>
+                <button class="link-btn" type="button" @click="clearAll()" x-show="userInput || formattedOutput"
+                    x-cloak>Clear all</button>
+            </div>
+            <textarea id="input" class="textarea-in" x-ref="input" x-model="userInput"
+                placeholder="Paste or type your text here. For lists, put one item per line."></textarea>
+        </div>
+
+        <!-- OUTPUT -->
+        <div class="pane pane-out">
+            <div class="pane-head">
+                <h2>Formatted text</h2>
+                <button class="btn-copy" type="button" :class="{ done: copied }" @click="copyToClipboard()"
+                    x-text="copied ? 'Copied ✓' : 'Copy'"></button>
+                <button class="btn-ghost" type="button" @click="useAsInput()" x-show="formattedOutput" x-cloak
+                    title="Move the result into the input so you can chain another tool">Use as input</button>
+                <span class="spacer"></span>
+                <span class="chip" x-show="formattedOutput" x-cloak><b x-text="[...formattedOutput].length"></b>
+                    characters</span>
+            </div>
+            <textarea class="textarea-out" :class="{ flash: pulse }" x-ref="resultRef" x-model="formattedOutput"
+                readonly aria-label="Formatted text" placeholder="Your result will appear here."></textarea>
+        </div>
+
+        <div class="toast" role="status" aria-live="polite" :class="{ show: toastVisible }" x-text="toastMsg"></div>
+    </section>
+
+    <script>
+        function textFormatter() {
+            return {
+                // ---------- State ----------
+                tab: 'format',
+                charLimit: 80,
+                separator: '-',
+                userInput: '',
+                formattedOutput: '',
+                copied: false,
+                pulse: false,
+                toastMsg: '',
+                toastVisible: false,
+                _toastTimer: null,
+
+                tabs: [
+                    { id: 'format', label: 'Format' },
+                    { id: 'case', label: 'Change case' },
+                    { id: 'lists', label: 'Lists' },
+                ],
+
+                cases: [
+                    { id: 'upper', label: 'UPPERCASE', hint: 'HELLO WORLD' },
+                    { id: 'lower', label: 'lowercase', hint: 'hello world' },
+                    { id: 'title', label: 'Title Case', hint: 'Hello World' },
+                    { id: 'sentence', label: 'Sentence case', hint: 'Hello world. Next sentence.' },
+                    { id: 'camel', label: 'camelCase', hint: 'helloWorld (one result per line)' },
+                    { id: 'pascal', label: 'PascalCase', hint: 'HelloWorld (one result per line)' },
+                    { id: 'snake', label: 'snake_case', hint: 'hello_world (one result per line)' },
+                    { id: 'kebab', label: 'kebab-case', hint: 'hello-world (one result per line)' },
+                    { id: 'constant', label: 'CONSTANT_CASE', hint: 'HELLO_WORLD (one result per line)' },
+                ],
+
+                listGroups: [
+                    {
+                        label: 'Sort', items: [
+                            { label: 'A → Z', arg: 'az', hint: 'Alphabetical. Ignores accents and case; item 2 comes before item 10' },
+                            { label: 'Z → A', arg: 'za', hint: 'Reverse alphabetical' },
+                            { label: 'Shortest first', arg: 'short', hint: 'Sort by line length, shortest first' },
+                            { label: 'Longest first', arg: 'long', hint: 'Sort by line length, longest first' },
+                            { label: 'Reverse', arg: 'reverse', hint: 'Flip the current order' },
+                            { label: 'Shuffle', arg: 'shuffle', hint: 'Random order' },
+                        ]
+                    },
+                    {
+                        label: 'Clean', items: [
+                            { label: 'Remove duplicates', arg: 'dedupe', hint: 'Keeps the first occurrence, ignores case' },
+                            { label: 'Remove empty lines', arg: 'noempty', hint: 'Deletes blank lines' },
+                            { label: 'Trim spaces', arg: 'trim', hint: 'Removes leading, trailing and double spaces on each line' },
+                            { label: 'Number lines', arg: 'number', hint: '1. First  2. Second …' },
+                        ]
+                    },
+                    {
+                        label: 'Convert', items: [
+                            { label: 'Lines → comma list', arg: 'toComma', hint: 'a, b, c' },
+                            { label: 'Comma list → lines', arg: 'fromComma', hint: 'Splits on commas and semicolons' },
+                        ]
+                    },
+                ],
+
+                // ---------- Live statistics ----------
+                get stats() {
+                    const t = this.userInput;
+                    const words = (t.match(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu) || []).length;
+                    const minutes = words / 200;
+                    return {
+                        words,
+                        chars: [...t].length,
+                        noSpaces: [...t.replace(/\s/g, '')].length,
+                        lines: t ? t.split(/\r?\n/).length : 0,
+                        sentences: t.split(/[.!?]+(?:\s|$)/).filter(s => s.trim()).length,
+                        reading: words === 0 ? '0 min' : (minutes < 1 ? '< 1 min' : Math.round(minutes) + ' min'),
+                    };
+                },
+
+                // ---------- Core plumbing ----------
+                apply(op, arg) {
+                    if (!this.userInput.trim()) {
+                        this.notify('Type or paste some text first.');
+                        this.$refs.input.focus();
+                        return;
+                    }
+                    this.formattedOutput = this[op](this.userInput, arg);
+                    this.copied = false;
+                    this.flash();
+                },
+
+                flash() {
+                    this.pulse = true;
+                    setTimeout(() => (this.pulse = false), 350);
+                },
+
+                notify(msg) {
+                    this.toastMsg = msg;
+                    this.toastVisible = true;
+                    clearTimeout(this._toastTimer);
+                    this._toastTimer = setTimeout(() => (this.toastVisible = false), 2200);
+                },
+
+                async copyToClipboard() {
+                    if (!this.formattedOutput) {
+                        this.notify('Nothing to copy yet.');
+                        return;
+                    }
+                    try {
+                        await navigator.clipboard.writeText(this.formattedOutput);
+                    } catch (e) {
+                        this.$refs.resultRef.select();
+                        document.execCommand('copy');
+                    }
+                    this.copied = true;
+                    setTimeout(() => (this.copied = false), 1600);
+                },
+
+                useAsInput() {
+                    this.userInput = this.formattedOutput;
+                    this.formattedOutput = '';
+                    this.$refs.input.focus();
+                    this.notify('Result moved to input.');
+                },
+
+                clearAll() {
+                    this.userInput = '';
+                    this.formattedOutput = '';
+                    this.$refs.input.focus();
+                },
+
+                // ---------- Helpers ----------
+                get sep() { return this.separator || '-'; },
+                escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); },
+                lines(t) { return t.split(/\r?\n/); },
+                cap(w) { return w.charAt(0).toUpperCase() + w.slice(1); },
+
+                // Splits "helloWorld", "hello_world", "Hello-World", "HTMLParser" into words
+                splitWords(line) {
+                    return line
+                        .replace(/([\p{Ll}\p{N}])(\p{Lu})/gu, '$1 $2')
+                        .replace(/(\p{Lu}+)(\p{Lu}\p{Ll})/gu, '$1 $2')
+                        .match(/[\p{L}\p{N}]+/gu) || [];
+                },
+
+                // ---------- Format ----------
+                wrap(text) {
+                    const max = Math.max(1, this.charLimit || 80);
+                    return this.lines(text).map(line => {
+                        const out = [];
+                        let cur = '';
+                        for (const w of line.split(/\s+/).filter(Boolean)) {
+                            if (!cur) cur = w;
+                            else if (cur.length + 1 + w.length <= max) cur += ' ' + w;
+                            else { out.push(cur); cur = w; }
+                        }
+                        if (cur) out.push(cur);
+                        return out.join('\n');
+                    }).join('\n');
+                },
+
+                hashtags(text) {
+                    const s = text.trim();
+                    // #A #B  ->  A,B
+                    if (s.startsWith('#')) {
+                        return (s.match(/#[^\s#,]+/g) || []).map(h => h.slice(1)).join(',');
+                    }
+                    // A, B (or one per line)  ->  #A #B
+                    return s.split(/[,\n]+/)
+                        .map(i => i.trim().replace(/^#/, ''))
+                        .filter(Boolean)
+                        .map(i => i.split(/\s+/).map(w => this.cap(w)).join('').replace(/[^\p{L}\p{N}_]/gu, ''))
+                        .filter(Boolean)
+                        .map(i => '#' + i)
+                        .join(' ');
+                },
+
+                slugify(text) {
+                    const sep = this.sep;
+                    return this.lines(text)
+                        .map(line => line
+                            .toLowerCase()
+                            .replace(/ß/g, 'ss').replace(/œ/g, 'oe').replace(/æ/g, 'ae')
+                            .normalize('NFKD')
+                            .replace(/[\u0300-\u036f]/g, '')   // strip accents
+                            .replace(/[^a-z0-9]+/g, ' ')        // anything else becomes a space
+                            .trim()
+                            .replace(/\s+/g, sep))
+                        .filter(Boolean)
+                        .join('\n');
+                },
+
+                unslugify(text) {
+                    const sepRe = new RegExp(this.escapeRegex(this.sep) + '|_', 'g');
+                    return this.lines(text)
+                        .map(line => line
+                            .replace(/([\p{Ll}\d])(\p{Lu})/gu, '$1 $2')
+                            .replace(/(\p{Lu}+)(\p{Lu}\p{Ll})/gu, '$1 $2')
+                            .replace(sepRe, ' ')
+                            .replace(/\s+/g, ' ')
+                            .trim()
+                            .replace(/(^|\s)(\p{L})/gu, (m, a, b) => a + b.toUpperCase()))
+                        .join('\n');
+                },
+
+                // ---------- Case ----------
+                convertCase(text, kind) {
+                    const perLine = fn => this.lines(text).map(fn).join('\n');
+                    const words = l => this.splitWords(l).map(w => w.toLowerCase());
+
+                    switch (kind) {
+                        case 'upper': return text.toUpperCase();
+                        case 'lower': return text.toLowerCase();
+                        case 'title':
+                            return text.toLowerCase()
+                                .replace(/(^|[^\p{L}\p{N}'’])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
+                        case 'sentence':
+                            return text.toLowerCase()
+                                .replace(/(^\s*|[.!?]\s+|\n\s*)(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
+                        case 'camel': return perLine(l => words(l).map((w, i) => i ? this.cap(w) : w).join(''));
+                        case 'pascal': return perLine(l => words(l).map(w => this.cap(w)).join(''));
+                        case 'snake': return perLine(l => words(l).join('_'));
+                        case 'kebab': return perLine(l => words(l).join('-'));
+                        case 'constant': return perLine(l => words(l).join('_').toUpperCase());
+                    }
+                    return text;
+                },
+
+                // ---------- Lists ----------
+                listOp(text, op) {
+                    const all = this.lines(text);
+                    const filled = all.filter(l => l.trim() !== '');
+                    const alpha = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+
+                    switch (op) {
+                        case 'az': return [...filled].sort(alpha).join('\n');
+                        case 'za': return [...filled].sort((a, b) => alpha(b, a)).join('\n');
+                        case 'short': return [...filled].sort((a, b) => a.length - b.length || alpha(a, b)).join('\n');
+                        case 'long': return [...filled].sort((a, b) => b.length - a.length || alpha(a, b)).join('\n');
+                        case 'reverse': return [...all].reverse().join('\n');
+                        case 'shuffle': {
+                            const a = [...filled];
+                            for (let i = a.length - 1; i > 0; i--) {
+                                const j = Math.floor(Math.random() * (i + 1));
+                                [a[i], a[j]] = [a[j], a[i]];
+                            }
+                            return a.join('\n');
+                        }
+                        case 'dedupe': {
+                            const seen = new Set();
+                            return filled.filter(l => {
+                                const key = l.trim().toLowerCase();
+                                if (seen.has(key)) return false;
+                                seen.add(key);
+                                return true;
+                            }).join('\n');
+                        }
+                        case 'noempty': return filled.join('\n');
+                        case 'trim': return all.map(l => l.trim().replace(/[ \t]{2,}/g, ' ')).join('\n');
+                        case 'number': return filled.map((l, i) => `${i + 1}. ${l}`).join('\n');
+                        case 'toComma': return filled.map(l => l.trim()).join(', ');
+                        case 'fromComma':
+                            return text.split(/\s*[,;]\s*/).map(s => s.trim()).filter(Boolean).join('\n');
+                    }
+                    return text;
+                },
+            };
+        }
+    </script>
+
+</body>
+
+</html>
